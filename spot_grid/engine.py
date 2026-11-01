@@ -248,8 +248,17 @@ class GridEngine:
             (o for o in pending if o["side"] == "SELL"
              and hi >= o["price"] * (D(1) + buffer)),
             key=lambda o: o["price"])
-        # When both sides are marketable, process the direction of travel first.
-        crossed = (buys + sells) if price < old else (sells + buys)
+        # Orders already marketable at the segment start execute before
+        # orders reached later on the segment. Preserve price priority.
+        at_start_buys = [o for o in buys
+                         if old <= o["price"] * (D(1) - buffer)]
+        at_start_sells = [o for o in sells
+                          if old >= o["price"] * (D(1) + buffer)]
+        reached_buys = [o for o in buys if o not in at_start_buys]
+        reached_sells = [o for o in sells if o not in at_start_sells]
+        crossed = (at_start_sells + at_start_buys +
+                   (reached_buys + reached_sells if price < old
+                    else reached_sells + reached_buys))
         for o in crossed:
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
@@ -328,6 +337,78 @@ class GridEngine:
         for point in points:
             self.on_price(point, eligible_ids=eligible)
 
+    def pnl_breakdown(self):
+        """Cost-basis attribution, with asset fees embedded in net inventory.
+
+        The grid and stop realized figures are gross of quote-asset fees.
+        Quote fees are deducted once in the reconciliation. Asset-denominated
+        fees reduce acquired quantity and increase its effective unit cost.
+        """
+        inventory = D(0)
+        basis = D(0)
+        realized_grid = D(0)
+        realized_stop = D(0)
+        maker_quote_fees = D(0)
+        taker_quote_fees = D(0)
+        maker_asset_fees = D(0)
+
+        def acquire(gross_qty, net_qty, price):
+            nonlocal inventory, basis
+            inventory += net_qty
+            basis += gross_qty * price
+
+        def dispose(qty, price):
+            nonlocal inventory, basis
+            if qty > inventory and qty - inventory > D("0.0000000001"):
+                raise RuntimeError("PNL ledger sold more asset than acquired")
+            cost = basis * qty / inventory if inventory else D(0)
+            inventory -= qty
+            basis -= cost
+            return qty * price - cost
+
+        for trade in self.initial_trades:
+            acquire(trade["gross_qty"], trade["net_qty"], trade["price"])
+            maker_asset_fees += trade["fee"]
+        for fill in self.fills:
+            if fill["side"] == "BUY":
+                acquire(fill["qty"], fill["qty"] - fill["fee"], fill["price"])
+                maker_asset_fees += fill["fee"]
+            else:
+                realized_grid += dispose(fill["qty"], fill["price"])
+                maker_quote_fees += fill["fee"]
+        for trade in self.stop_trades:
+            realized_stop += dispose(trade["qty"], trade["price"])
+            taker_quote_fees += trade["fee"]
+
+        if abs(inventory - self.asset) > D("0.0000000001"):
+            raise RuntimeError("PNL ledger inventory mismatch")
+        unrealized = inventory * self.last_price - basis
+        fees_quote = maker_quote_fees + taker_quote_fees
+        reconciled = realized_grid + realized_stop + unrealized - fees_quote
+        actual = self.usdt + self.asset * self.last_price - self.config.capital
+        if abs(reconciled - actual) > D("0.00000001"):
+            raise RuntimeError("PNL attribution does not reconcile to equity")
+        # Dust is only unreserved, untradable asset quantity; after a stop
+        # the remaining free asset is explicitly the unsellable remainder.
+        dust = self.asset_free if self.stopped else floor_step(
+            self.asset_free, self.config.qty_step)
+        return {
+            "grid_realized_gross_usdt": str(realized_grid),
+            "stop_realized_gross_usdt": str(realized_stop),
+            "coin_unrealized_usdt": str(unrealized),
+            "maker_fees_usdt": str(maker_quote_fees),
+            "taker_fees_usdt": str(taker_quote_fees),
+            "initial_maker_fees_asset": str(sum(
+                (t["fee"] for t in self.initial_trades), D(0))),
+            "grid_maker_fees_asset": str(sum(
+                (f["fee"] for f in self.fills if f["fee_asset"] == "ASSET"), D(0))),
+            "asset_fees_included_in_basis": str(maker_asset_fees),
+            "dust_asset": str(dust),
+            "dust_value_usdt": str(dust * self.last_price),
+            "remaining_asset_cost_basis_usdt": str(basis),
+            "pnl_reconciled_usdt": str(reconciled),
+        }
+
     def snapshot(self):
         if self.config.debug:
             self._assert_balances()
@@ -348,4 +429,5 @@ class GridEngine:
                                  +sum((t["fee"] for t in self.initial_trades),D(0))),
                 "initial_trades":len(self.initial_trades),
                 "fills":len(self.fills),
-                "open_orders":len(self.open_orders)}
+                "open_orders":len(self.open_orders),
+                "pnl_breakdown":self.pnl_breakdown()}
