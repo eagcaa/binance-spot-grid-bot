@@ -69,3 +69,21 @@ def test_invalid_order_does_not_silently_disappear():
     ))
     with pytest.raises(RuntimeError, match="below minimum"):
         engine._order("BUY", D("100"), D("0.01"))
+
+
+def test_fixed_buy_quantity_after_200_cycles():
+    engine = GridEngine(GridConfig(
+        lower=D("90"), upper=D("110"), intervals=4,
+        capital=D("22"), initial_price=D("100")
+    ))
+    expected = engine.buy_qty[2]
+    for _ in range(200):
+        engine.on_price(D("106"))
+        engine.on_price(D("99"))
+    buys = [fill for fill in engine.fills
+            if fill["side"] == "BUY" and fill["price"] == D("100")]
+    assert len(buys) == 200
+    assert all(fill["qty"] == expected for fill in buys)
+    assert any(order["status"] == "OPEN" and order["side"] == "BUY"
+               and order["price"] == D("100") and order["qty"] == expected
+               for order in engine.orders)
