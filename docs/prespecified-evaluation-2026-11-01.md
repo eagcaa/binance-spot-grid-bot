@@ -20,3 +20,6 @@ This protocol is fixed before running the new filtered-classic comparison across
 5. Correlated symbols and overlapping market regimes mean 11 symbols are **not 11 independent replications**. The seven-day sample is hypothesis-generating only; do not call it validated or live-trading ready.
 
 **Do not modify the upstream forecast generator as part of this experiment.**
+
+## Simulation correction before rerun
+The initial 11-symbol run used an incorrect uniform price tick (0.01), quantity step (0.000001) and minimum notional (5 USDT), invalidating its coin-level interpretation, especially DOGEUSDT and PYTHUSDT. **Rerun the unchanged 11-symbol cohort, time range, horizon, min_samples=15 and prespecified criteria after the correction.** The corrected runner reads PRICE_FILTER.tickSize, LOT_SIZE.stepSize and NOTIONAL.minNotional (or MIN_NOTIONAL.minNotional when NOTIONAL is absent) from public Binance Spot /api/v3/exchangeInfo for each symbol, and fails closed if rules cannot be obtained. These are current exchange rules, not a historical rules snapshot; historical-rule drift remains a limitation. No orders or authenticated endpoints are used. The earlier output must not be used for final coin-level claims.
