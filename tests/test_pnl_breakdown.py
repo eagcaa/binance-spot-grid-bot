@@ -67,3 +67,21 @@ def test_start_marketable_sell_precedes_newly_reached_buy():
     # Assert stable accounting under the mixed-side segment.
     e.on_price(D("94"))
     assert_reconciles(e)
+
+
+def test_slot_grid_profit_excludes_starting_inventory_average_cost():
+    e = engine(fee_rate=D("0"))
+    e.on_price(D("89"))
+    e.on_price(D("96"))
+    breakdown = e.snapshot()["pnl_breakdown"]
+    assert D(breakdown["grid_realized_gross_usdt"]) == D("5") * e.buy_qty[0]
+    assert_reconciles(e)
+
+
+def test_unallocated_asset_includes_all_free_coin_not_only_substep_dust():
+    e = engine()
+    e.on_price(D("94"))
+    breakdown = e.snapshot()["pnl_breakdown"]
+    assert D(breakdown["unallocated_asset"]) == e.asset_free
+    assert D(breakdown["dust_asset"]) < e.config.qty_step
+    assert D(breakdown["unallocated_value_usdt"]) == e.asset_free * e.last_price
