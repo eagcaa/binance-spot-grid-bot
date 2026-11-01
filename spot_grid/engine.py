@@ -20,7 +20,7 @@ class GridConfig:
     qty_step: Decimal = D("0.000001")
     min_notional: Decimal = D("5")
     debug: bool = False
-    fill_model: str = "touch"
+    fill_model: str = "through"
     through_bps: Decimal = D("5")
     stop_loss: Decimal | None = None
     taker_fee_rate: Decimal = D("0.001")
@@ -438,7 +438,7 @@ class GridEngine:
             "pnl_reconciled_usdt": str(reconciled),
         }
 
-    def snapshot(self):
+    def snapshot(self, *, include_pnl=True):
         if self.config.debug:
             self._assert_balances()
         equity=self.usdt+self.asset*self.last_price
@@ -459,4 +459,4 @@ class GridEngine:
                 "initial_trades":len(self.initial_trades),
                 "fills":len(self.fills),
                 "open_orders":len(self.open_orders),
-                "pnl_breakdown":self.pnl_breakdown()}
+                "pnl_breakdown":self.pnl_breakdown() if include_pnl else None}
