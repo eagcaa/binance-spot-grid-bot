@@ -24,7 +24,7 @@ class GridConfig:
     through_bps: Decimal = D("5")
     stop_loss: Decimal | None = None
     taker_fee_rate: Decimal = D("0.001")
-    slippage: Decimal = D("0")
+    slippage: Decimal = D("0.0005")
 
 class GridEngine:
     """Crossing-based paper fills, not production exchange execution."""
@@ -223,15 +223,17 @@ class GridEngine:
         self.stopped = True
         self._assert_balances()
 
-    def on_price(self,price: Decimal, eligible_ids=None):
+    def on_price(self,price: Decimal, eligible_ids=None, _stop_path=False):
         if self.stopped:
             return
         price=D(str(price))
-        if self.config.stop_loss is not None and price <= self.config.stop_loss:
-            self._stop(price)
-            return
-        if price<=0:
+        if price <= 0:
             raise ValueError("price must be positive")
+        if (not _stop_path and self.config.stop_loss is not None
+                and price <= self.config.stop_loss):
+            # Only BUY orders crossed on the way down may fill before the stop.
+            self._fill_stop_path(price, None)
+            return
         old=self.last_price
         pending=[o for o in self.open_orders.values()
                  if eligible_ids is None or o["id"] in eligible_ids]
@@ -279,6 +281,31 @@ class GridEngine:
                 self._assert_balances()
         self.last_price=price
 
+    def _fill_stop_path(self, observed_price, eligible_ids):
+        stop = self.config.stop_loss
+        # No SELL fills are allowed in this conservative stop path.
+        # A gap can cross BUY levels at their limit prices.
+        pending = [
+            o for o in self.open_orders.values()
+            if o["side"] == "BUY"
+            and (eligible_ids is None or o["id"] in eligible_ids)
+        ]
+        buffer = (self.config.through_bps / D("10000")
+                  if self.config.fill_model == "through" else D(0))
+        low = min(self.last_price, observed_price, stop)
+        buys = sorted(
+            (o for o in pending
+             if low <= o["price"] * (D(1) - buffer)),
+            key=lambda o: o["price"], reverse=True)
+        for order in buys:
+            # Execute through the existing reservation and replacement logic,
+            # but restrict eligibility to this single original BUY order.
+            # Temporarily shield other orders from the regular price path.
+            self.on_price(order["price"] * (D(1) - buffer),
+                          eligible_ids={order["id"]}, _stop_path=True)
+        trigger = observed_price if observed_price <= stop else stop
+        self._stop(trigger)
+
     def on_candle(self, candle, path="high_first", allow_same_candle_reentry=False):
         if self.stopped:
             return
@@ -289,10 +316,8 @@ class GridEngine:
                 self.outside_entries += 1
         self._was_outside = outside
         if self.config.stop_loss is not None and candle["low"] <= self.config.stop_loss:
-            # Conservative precedence: no grid fills from a stop-touching candle.
-            trigger = (candle["open"] if candle["open"] <= self.config.stop_loss
-                       else self.config.stop_loss)
-            self._stop(trigger)
+            # The opening-to-stop downward path fills eligible BUYs, never SELLs.
+            self._fill_stop_path(candle["open"], set(self.open_orders))
             return
         if path not in ("high_first", "low_first"):
             raise ValueError("invalid intrabar path")
