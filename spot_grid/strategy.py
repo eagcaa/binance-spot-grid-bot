@@ -1,6 +1,6 @@
 """Point-in-time strategy comparison on the same full set of windows."""
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal as D
 
 from .comparison import buy_hold
@@ -21,7 +21,7 @@ def _summary(values):
 
 def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
                       capital=D("1000"), target=None, coverage_tolerance=D("0.05"),
-                      min_samples=30, max_intervals=50,
+                      min_samples=30, min_history_days=0, max_intervals=50,
                       min_net_margin=D("0.0015"),
                       classic_half_width=D("0.05"), **grid_options):
     """Independent, non-compounded windows. Filter failures stay in cash.
@@ -96,7 +96,8 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
         quality = coverage_at(outcomes, symbol=forecast.symbol, horizon=horizon,
                               horizon_minutes=forecast.horizon_minutes,
                               as_of=as_of, target=threshold,
-                              min_samples=min_samples)
+                              min_samples=min_samples,
+                              min_span=timedelta(days=min_history_days))
         entry["coverage_target"] = str(threshold)
         entry["coverage_samples"] = quality.samples
         entry["coverage"] = str(quality.coverage) if quality.coverage is not None else None
@@ -123,6 +124,7 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
         results.append(entry)
     skipped = Counter(r["skipped"].split(":")[0] for r in results if "skipped" in r)
     forecast_pnls = [D(r["forecast_pnl"]) for r in results]
+    traded_pnls = [D(r["forecast_pnl"]) for r in results if r["forecast_grid"] is not None]
     classic_pnls = [D(r["classic_pnl"]) for r in results]
     hold_pnls = [D(r["buy_hold"]["pnl"]) for r in results]
     return {"windows": results, "total_windows": len(results),
@@ -130,6 +132,7 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
             "skipped_windows": sum("skipped" in r for r in results),
             "skip_reasons": dict(skipped),
             "summary": {"forecast": _summary(forecast_pnls),
+                        "forecast_traded_only": _summary(traded_pnls),
                         "classic": _summary(classic_pnls),
                         "buy_hold": _summary(hold_pnls),
                         "forecast_beats_classic_windows":
