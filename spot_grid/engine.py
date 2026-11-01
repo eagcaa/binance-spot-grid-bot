@@ -39,6 +39,16 @@ class GridEngine:
         self.levels = [floor_step(p,c.tick) for p in raw]
         if len(set(self.levels)) != len(self.levels):
             raise ValueError("grid levels collapse at tick")
+        # Reject grid configurations that silently create no usable orders.
+        unit = c.capital / D(c.intervals)
+        min_order = min(
+            floor_step(unit / p, c.qty_step) * p for p in self.levels
+        )
+        if min_order < c.min_notional:
+            raise ValueError(
+                f"grid order {min_order:.2f} USDT below minimum "
+                f"{c.min_notional} USDT; reduce grid intervals or add capital"
+            )
         self.config = c
         self.usdt = c.capital
         self.asset = D(0)
