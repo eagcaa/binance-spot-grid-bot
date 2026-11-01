@@ -39,23 +39,33 @@ def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, 
         if (outcome.symbol == symbol and same_horizon
                 and outcome.evaluated_at < as_of):
             known.append(outcome)
-    count = len(known)
-    if horizon_minutes is not None and count >= min_samples:
-        span = max(o.evaluated_at for o in known) - min(o.evaluated_at for o in known)
-        independent = int(span / timedelta(minutes=horizon_minutes))
-        if independent < min_samples:
-            rate = D(sum(bool(o.covered) for o in known)) / D(count)
-            return CoverageResult(False, count, rate, "insufficient_independent_samples")
     if min_span < timedelta(0):
         raise ValueError("min_span must be nonnegative")
-    if count >= min_samples and min_span > timedelta(0):
-        span = max(o.evaluated_at for o in known) - min(o.evaluated_at for o in known)
-        if span < min_span:
-            rate = D(sum(bool(o.covered) for o in known)) / D(count)
-            return CoverageResult(False, count, rate, "insufficient_time_span")
-    rate = D(sum(bool(o.covered) for o in known)) / D(count) if count else None
+    known.sort(key=lambda o: o.evaluated_at)
+    # Greedy non-overlapping evaluation samples; gaps add no fake evidence.
+    if horizon_minutes is not None:
+        step = timedelta(minutes=horizon_minutes)
+        independent = []
+        last = None
+        for outcome in known:
+            if last is None or outcome.evaluated_at - last >= step:
+                independent.append(outcome)
+                last = outcome.evaluated_at
+        samples = independent
+    else:
+        samples = known
+    count = len(samples)
+    rate = (D(sum(bool(o.covered) for o in samples)) / D(count)
+            if count else None)
     if count < min_samples:
-        return CoverageResult(False, count, rate, "insufficient_history")
+        reason = ("insufficient_independent_samples"
+                  if horizon_minutes is not None and len(known) >= min_samples
+                  else "insufficient_history")
+        return CoverageResult(False, count, rate, reason)
+    if min_span > timedelta(0):
+        span = samples[-1].evaluated_at - samples[0].evaluated_at
+        if span < min_span:
+            return CoverageResult(False, count, rate, "insufficient_time_span")
     if rate < target:
         return CoverageResult(False, count, rate, "coverage_below_target")
     return CoverageResult(True, count, rate, None)
