@@ -61,3 +61,17 @@ def test_200_cycles_with_small_capital():
             if f["side"] == "BUY" and f["price"] == D("100")]
     assert len(buys) == 200
     assert all(f["qty"] == original for f in buys)
+
+
+@pytest.mark.parametrize("capital", ["30", "1000"])
+def test_narrow_grid_rejected_before_first_trade(capital):
+    with pytest.raises(ValueError, match="cannot cover fees"):
+        GridEngine(GridConfig(
+            lower=D("99.80"), upper=D("100.20"), intervals=4,
+            capital=D(capital), initial_price=D("100")
+        ))
+
+
+def test_wide_grid_passes_fee_spacing_guard():
+    engine = make("1000")
+    assert engine.levels[1] > engine.levels[0]
