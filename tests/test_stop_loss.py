@@ -31,7 +31,8 @@ def test_stop_touch_liquidates_before_grid_fills():
     assert [f["price"] for f in e.fills] == [D("95"), D("90")]
     assert e.usdt_locked == e.asset_locked == 0
     assert len(e.open_orders) == 0
-    assert all(o["status"] == "CANCELLED" for o in e.orders)
+    assert all(o["status"] in ("FILLED", "CANCELLED") for o in e.orders)
+    assert {o["price"] for o in e.orders if o["status"] == "FILLED"} == {D("95"), D("90")}
     previous = e.snapshot()
     e.on_candle(candle("100", "110", "80", "100"))
     e.on_price(D("95"))
