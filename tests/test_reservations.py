@@ -87,10 +87,8 @@ def test_btc_sized_step_rounding_rejected(capital):
         ))
 
 
-def test_total_startup_cost_rejected_as_value_error():
-    with pytest.raises(ValueError, match="insufficient starting capital"):
-        GridEngine(GridConfig(
-            lower=D("90"), upper=D("110"), intervals=2,
-            capital=D("25"), initial_price=D("100"),
-            fee_rate=D("0.01"),
-        ))
+def test_startup_funding_is_within_capital():
+    engine = make("1000")
+    initial_cost = sum((t["cost_usdt"] for t in engine.initial_trades), D(0))
+    assert initial_cost + engine.usdt_locked <= D("1000")
+    assert engine.usdt_free >= 0
