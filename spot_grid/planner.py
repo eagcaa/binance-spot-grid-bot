@@ -30,3 +30,24 @@ def plan(forecast: RangeForecast, *, as_of: datetime, price: D,
     return GridConfig(lower=forecast.lower, upper=forecast.upper,
                       intervals=intervals, capital=capital,
                       initial_price=price, stop_loss=stop_loss, **grid_options)
+
+
+def plan_auto(forecast: RangeForecast, *, as_of: datetime, price: D,
+              capital: D, max_intervals: int = 50, min_intervals: int = 2,
+              stop_loss: D | None = None, **grid_options) -> GridConfig:
+    """Choose the largest interval count passing real engine validations."""
+    from .engine import GridEngine
+
+    if min_intervals < 2 or max_intervals < min_intervals:
+        raise ValueError("invalid grid interval search limits")
+    last_error = None
+    for intervals in range(max_intervals, min_intervals - 1, -1):
+        try:
+            config = plan(forecast, as_of=as_of, price=price,
+                          capital=capital, intervals=intervals,
+                          stop_loss=stop_loss, **grid_options)
+            GridEngine(config)
+            return config
+        except ValueError as exc:
+            last_error = exc
+    raise ValueError(f"no viable grid count: {last_error}")
