@@ -84,6 +84,33 @@ def test_paper_session_does_not_send_orders_and_tracks_equity():
     config = plan(forecast(), as_of=T, price=D("100"),
                   capital=D("1000"), intervals=4)
     session = PaperSession(config)
-    snapshot = session.on_candle(candle(T))
-    assert session.report()["events"][0]["equity"] == snapshot["equity"]
-    assert session.report()["snapshot"] == snapshot
+    event = session.on_candle(candle(T))
+    assert session.report()["events"][0] == event
+    assert session.report()["snapshot"]["equity"] == event["equity"]
+
+
+def test_paper_defaults_to_conservative_through():
+    config = plan(forecast(), as_of=T, price=D("100"),
+                  capital=D("1000"), intervals=4)
+    assert config.fill_model == "through"
+    assert PaperSession(config).engine.config.fill_model == "through"
+
+
+def test_paper_candles_do_not_recompute_pnl(monkeypatch):
+    config = plan(forecast(), as_of=T, price=D("100"),
+                  capital=D("1000"), intervals=4)
+    session = PaperSession(config)
+    calls = []
+    original = session.engine.pnl_breakdown
+
+    def counted():
+        calls.append(True)
+        return original()
+
+    monkeypatch.setattr(session.engine, "pnl_breakdown", counted)
+    for i in range(20):
+        event = session.on_candle(candle(T + timedelta(minutes=i)))
+        assert "equity" in event
+    assert calls == []
+    session.report()
+    assert len(calls) == 1
