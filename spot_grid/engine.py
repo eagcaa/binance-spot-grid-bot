@@ -187,21 +187,19 @@ class GridEngine:
         old=self.last_price
         pending=[o for o in self.open_orders.values()
                  if eligible_ids is None or o["id"] in eligible_ids]
-        if price<old:
-            crossed=sorted((o for o in pending if o["side"]=="BUY" and price<=o["price"]<old),
-                           key=lambda o:o["price"],reverse=True)
+        buffer = (self.config.through_bps / D("10000")
+                  if self.config.fill_model == "through" else D(0))
+        if price < old:
+            crossed = sorted(
+                (o for o in pending if o["side"] == "BUY"
+                 and price <= o["price"] * (D(1) - buffer) < old),
+                key=lambda o: o["price"], reverse=True)
         else:
-            crossed=sorted((o for o in pending if o["side"]=="SELL" and old<o["price"]<=price),
-                           key=lambda o:o["price"])
+            crossed = sorted(
+                (o for o in pending if o["side"] == "SELL"
+                 and old < o["price"] * (D(1) + buffer) <= price),
+                key=lambda o: o["price"])
         for o in crossed:
-            if self.config.fill_model == "through":
-                buffer = self.config.through_bps / D("10000")
-                threshold = (o["price"] * (D(1) - buffer)
-                             if o["side"] == "BUY"
-                             else o["price"] * (D(1) + buffer))
-                if ((o["side"] == "BUY" and price > threshold) or
-                    (o["side"] == "SELL" and price < threshold)):
-                    continue
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
                 fee=q*self.config.fee_rate
