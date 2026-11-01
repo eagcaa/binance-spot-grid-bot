@@ -189,16 +189,17 @@ class GridEngine:
                  if eligible_ids is None or o["id"] in eligible_ids]
         buffer = (self.config.through_bps / D("10000")
                   if self.config.fill_model == "through" else D(0))
-        if price < old:
-            crossed = sorted(
-                (o for o in pending if o["side"] == "BUY"
-                 and price <= o["price"] * (D(1) - buffer) < old),
-                key=lambda o: o["price"], reverse=True)
-        else:
-            crossed = sorted(
-                (o for o in pending if o["side"] == "SELL"
-                 and old < o["price"] * (D(1) + buffer) <= price),
-                key=lambda o: o["price"])
+        lo, hi = min(old, price), max(old, price)
+        buys = sorted(
+            (o for o in pending if o["side"] == "BUY"
+             and lo <= o["price"] * (D(1) - buffer)),
+            key=lambda o: o["price"], reverse=True)
+        sells = sorted(
+            (o for o in pending if o["side"] == "SELL"
+             and hi >= o["price"] * (D(1) + buffer)),
+            key=lambda o: o["price"])
+        # When both sides are marketable, process the direction of travel first.
+        crossed = (buys + sells) if price < old else (sells + buys)
         for o in crossed:
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
