@@ -3,6 +3,7 @@ import csv
 import json
 from decimal import Decimal
 from .engine import GridConfig, GridEngine
+from .ohlc import read_ohlc, compare_paths
 
 def main():
     p=argparse.ArgumentParser(description="Offline spot grid CSV simulation")
@@ -12,7 +13,14 @@ def main():
     p.add_argument("--capital",type=Decimal,default=Decimal("1000"))
     p.add_argument("--intervals",type=int,default=10)
     p.add_argument("--mode",choices=["arithmetic","geometric"],default="arithmetic")
+    p.add_argument("--format", choices=["price", "ohlc"], default="price")
     args=p.parse_args()
+    if args.format == "ohlc":
+        candles = read_ohlc(args.csv)
+        config = GridConfig(args.lower, args.upper, args.intervals, args.capital,
+                            candles[0]["open"], mode=args.mode)
+        print(json.dumps(compare_paths(config, candles), indent=2))
+        return
     with open(args.csv,newline="") as f:
         prices=[Decimal(row["price"]) for row in csv.DictReader(f)]
     if not prices:
