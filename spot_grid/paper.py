@@ -19,7 +19,7 @@ class PaperSession:
             "stopped": self.engine.stopped,
             "equity": str(equity),
         })
-        return self.engine.snapshot()
+        return self.events[-1]
 
     def report(self):
         return {"snapshot": self.engine.snapshot(),
