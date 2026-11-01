@@ -13,6 +13,8 @@ class RangeForecast:
     valid_until: datetime
     lower: D
     upper: D
+    horizon_minutes: int = 60
+    target_coverage: D = D("0.70")
 
 
 def plan(forecast: RangeForecast, *, as_of: datetime, price: D,
@@ -30,3 +32,34 @@ def plan(forecast: RangeForecast, *, as_of: datetime, price: D,
     return GridConfig(lower=forecast.lower, upper=forecast.upper,
                       intervals=intervals, capital=capital,
                       initial_price=price, stop_loss=stop_loss, **grid_options)
+
+
+def plan_auto(forecast: RangeForecast, *, as_of: datetime, price: D,
+              capital: D, max_intervals: int = 50, min_intervals: int = 2,
+              stop_loss: D | None = None, min_net_margin: D = D("0.0015"),
+              **grid_options) -> GridConfig:
+    """Choose the largest feasible grid count with a minimum net slot margin."""
+    from .engine import GridEngine, floor_step
+
+    if min_intervals < 2 or max_intervals < min_intervals:
+        raise ValueError("invalid grid interval search limits")
+    if min_net_margin < 0:
+        raise ValueError("min_net_margin must be nonnegative")
+    last_error = None
+    for intervals in range(max_intervals, min_intervals - 1, -1):
+        try:
+            config = plan(forecast, as_of=as_of, price=price,
+                          capital=capital, intervals=intervals,
+                          stop_loss=stop_loss, **grid_options)
+            engine = GridEngine(config)
+            for i, qty in enumerate(engine.buy_qty):
+                net_qty = (qty * (D(1) - config.fee_rate))
+                sell_qty = floor_step(net_qty, config.qty_step)
+                proceeds = sell_qty * engine.levels[i + 1] * (D(1) - config.fee_rate)
+                cost = qty * engine.levels[i]
+                if proceeds / cost - D(1) < min_net_margin:
+                    raise ValueError("grid slot net margin below minimum")
+            return config
+        except ValueError as exc:
+            last_error = exc
+    raise ValueError(f"no viable grid count: {last_error}")
