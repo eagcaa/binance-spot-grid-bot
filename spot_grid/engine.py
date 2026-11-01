@@ -54,6 +54,18 @@ class GridEngine:
                 f"grid order {min_order:.2f} USDT below minimum "
                 f"{c.min_notional} USDT; reduce grid intervals or add capital"
             )
+        # A completed sell must fund the next buy after both trading fees.
+        # This conservative guard prevents narrow grids from failing at runtime.
+        worst = min(
+            self.levels[i + 1] / self.levels[i]
+            for i in range(c.intervals)
+        )
+        if worst * (D(1) - c.fee_rate) ** 2 <= D(1):
+            minimum = (D(1) / (D(1) - c.fee_rate) ** 2 - D(1)) * 100
+            raise ValueError(
+                f"grid step {(worst - 1) * 100:.3f}% cannot cover fees; "
+                f"minimum {minimum:.3f}%"
+            )
         self.config = c
         self.usdt_free = c.capital
         self.usdt_locked = D(0)
