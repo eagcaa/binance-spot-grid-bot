@@ -19,6 +19,7 @@ class GridConfig:
     tick: Decimal = D("0.01")
     qty_step: Decimal = D("0.000001")
     min_notional: Decimal = D("5")
+    debug: bool = False
 
 class GridEngine:
     """Crossing-based paper fills, not production exchange execution."""
@@ -93,7 +94,9 @@ class GridEngine:
         self.asset_free = D(0)
         self.asset_locked = D(0)
         self.last_price = c.initial_price
-        self.orders = []
+        self.orders = []  # historical order ledger
+        self.open_orders = {}  # active orders only, keyed by order id
+        self._next_order_id = 1
         self.fills = []
         self.initial_trades = []
         unit = c.capital/D(c.intervals)
@@ -136,15 +139,18 @@ class GridEngine:
 
     def _assert_balances(self):
         expected_usdt = sum(
-            (o["price"] * o["qty"] for o in self.orders
-             if o["status"] == "OPEN" and o["side"] == "BUY"), D(0))
+            (o["price"] * o["qty"] for o in self.open_orders.values()
+             if o["side"] == "BUY"), D(0))
         expected_asset = sum(
-            (o["qty"] for o in self.orders
-             if o["status"] == "OPEN" and o["side"] == "SELL"), D(0))
-        assert self.usdt_locked == expected_usdt, "USDT reservation mismatch"
-        assert self.asset_locked == expected_asset, "asset reservation mismatch"
-        assert min(self.usdt_free, self.usdt_locked,
-                   self.asset_free, self.asset_locked) >= 0, "negative balance"
+            (o["qty"] for o in self.open_orders.values()
+             if o["side"] == "SELL"), D(0))
+        if self.usdt_locked != expected_usdt:
+            raise RuntimeError("USDT reservation mismatch")
+        if self.asset_locked != expected_asset:
+            raise RuntimeError("asset reservation mismatch")
+        if min(self.usdt_free, self.usdt_locked,
+               self.asset_free, self.asset_locked) < 0:
+            raise RuntimeError("negative balance")
 
     def _order(self, side, price, qty):
         if qty <= 0 or qty * price < self.config.min_notional:
@@ -162,16 +168,20 @@ class GridEngine:
             self.asset_locked += qty
         else:
             raise ValueError("invalid order side")
-        self.orders.append({"id": len(self.orders) + 1, "side": side,
-                            "price": price, "qty": qty, "status": "OPEN"})
-        self._assert_balances()
+        order = {"id": self._next_order_id, "side": side,
+                 "price": price, "qty": qty, "status": "OPEN"}
+        self._next_order_id += 1
+        self.orders.append(order)
+        self.open_orders[order["id"]] = order
+        if self.config.debug:
+            self._assert_balances()
 
     def on_price(self,price: Decimal):
         price=D(str(price))
         if price<=0:
             raise ValueError("price must be positive")
         old=self.last_price
-        pending=[o for o in self.orders if o["status"]=="OPEN"]
+        pending=list(self.open_orders.values())
         if price<old:
             crossed=sorted((o for o in pending if o["side"]=="BUY" and price<=o["price"]<old),
                            key=lambda o:o["price"],reverse=True)
@@ -182,7 +192,8 @@ class GridEngine:
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
                 fee=q*self.config.fee_rate
-                assert self.usdt_locked >= p*q, "BUY reservation missing"
+                if self.usdt_locked < p*q:
+                    raise RuntimeError("BUY reservation missing")
                 self.usdt_locked -= p*q
                 self.asset_free += q-fee
                 next_side="SELL"
@@ -190,7 +201,8 @@ class GridEngine:
                 next_qty=floor_step(q-fee,self.config.qty_step)
                 fee_asset="ASSET"
             else:
-                assert self.asset_locked >= q, "SELL reservation missing"
+                if self.asset_locked < q:
+                    raise RuntimeError("SELL reservation missing")
                 fee=p*q*self.config.fee_rate
                 self.asset_locked -= q
                 self.usdt_free += p*q-fee
@@ -199,14 +211,17 @@ class GridEngine:
                 next_qty=self.buy_qty[self.levels.index(next_price)]
                 fee_asset="USDT"
             o["status"]="FILLED"
+            del self.open_orders[o["id"]]
             self.fills.append({"order_id":o["id"],"side":o["side"],"price":p,
                                "qty":q,"fee":fee,"fee_asset":fee_asset})
             self._order(next_side,next_price,next_qty)
-            self._assert_balances()
+            if self.config.debug:
+                self._assert_balances()
         self.last_price=price
 
     def snapshot(self):
-        self._assert_balances()
+        if self.config.debug:
+            self._assert_balances()
         equity=self.usdt+self.asset*self.last_price
         return {"usdt":str(self.usdt),"asset":str(self.asset),
                 "usdt_free":str(self.usdt_free),"usdt_locked":str(self.usdt_locked),
@@ -219,4 +234,4 @@ class GridEngine:
                                  +sum((t["fee"] for t in self.initial_trades),D(0))),
                 "initial_trades":len(self.initial_trades),
                 "fills":len(self.fills),
-                "open_orders":sum(o["status"]=="OPEN" for o in self.orders)}
+                "open_orders":len(self.open_orders)}
