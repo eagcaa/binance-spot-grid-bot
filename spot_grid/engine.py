@@ -41,8 +41,12 @@ class GridEngine:
             raise ValueError("grid levels collapse at tick")
         # Reject grid configurations that silently create no usable orders.
         unit = c.capital / D(c.intervals)
+        self.buy_qty = [
+            floor_step(unit / self.levels[i + 1], c.qty_step)
+            for i in range(c.intervals)
+        ]
         min_order = min(
-            floor_step(unit / self.levels[i + 1], c.qty_step) * self.levels[i]
+            self.buy_qty[i] * self.levels[i]
             for i in range(c.intervals)
         )
         if min_order < c.min_notional:
@@ -60,10 +64,10 @@ class GridEngine:
         unit = c.capital/D(c.intervals)
         for i,price in enumerate(self.levels[:-1]):
             if price < c.initial_price:
-                self._order("BUY",price,floor_step(unit/price,c.qty_step))
+                self._order("BUY",price,self.buy_qty[i])
             else:
                 target = self.levels[i+1]
-                qty = floor_step(unit/target,c.qty_step)
+                qty = self.buy_qty[i]
                 # Initial spot purchase: gross amount includes the base-asset fee.
                 gross = ((qty / (D(1)-c.fee_rate)) / c.qty_step).to_integral_value(rounding="ROUND_UP") * c.qty_step
                 cost = gross*c.initial_price
@@ -117,7 +121,7 @@ class GridEngine:
                 self.usdt+=p*q-fee
                 next_side="BUY"
                 next_price=self.levels[self.levels.index(p)-1]
-                next_qty=q
+                next_qty=self.buy_qty[self.levels.index(next_price)]
                 fee_asset="USDT"
             o["status"]="FILLED"
             self.fills.append({"order_id":o["id"],"side":o["side"],"price":p,
