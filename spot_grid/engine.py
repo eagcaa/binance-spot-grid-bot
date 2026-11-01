@@ -390,8 +390,8 @@ class GridEngine:
             raise RuntimeError("PNL attribution does not reconcile to equity")
         # Dust is only unreserved, untradable asset quantity; after a stop
         # the remaining free asset is explicitly the unsellable remainder.
-        dust = self.asset_free if self.stopped else floor_step(
-            self.asset_free, self.config.qty_step)
+        dust = (self.asset_free if self.stopped else
+                self.asset_free - floor_step(self.asset_free, self.config.qty_step))
         return {
             "grid_realized_gross_usdt": str(realized_grid),
             "stop_realized_gross_usdt": str(realized_stop),
