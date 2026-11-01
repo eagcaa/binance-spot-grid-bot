@@ -26,19 +26,26 @@ def walk_forward(forecasts, candles, *, capital=D("1000"), intervals=10,
         parsed.append((stamp, candle))
     results = []
     previous_end = None
+    grid_options.setdefault("fill_model", "through")
     for forecast in forecasts:
         if previous_end is not None and forecast.created_at < previous_end:
-            raise ValueError("overlapping forecast windows are not supported")
+            continue
         window = [(t, c) for t, c in parsed
                   if forecast.created_at <= t < forecast.valid_until]
         if not window:
             continue
         start, first = window[0]
-        config = plan(forecast, as_of=start, price=first["open"],
-                      capital=capital, intervals=intervals,
-                      stop_loss=stop_loss, **grid_options)
-        engine = replay_ohlc(config, [c for _, c in window],
-                             path="low_first", conservative=True)
+        try:
+            config = plan(forecast, as_of=start, price=first["open"],
+                          capital=capital, intervals=intervals,
+                          stop_loss=stop_loss, **grid_options)
+            engine = replay_ohlc(config, [c for _, c in window],
+                                 path="low_first", conservative=True)
+        except ValueError as exc:
+            results.append({"symbol": forecast.symbol,
+                            "start": start.isoformat(), "skipped": str(exc)})
+            previous_end = forecast.valid_until
+            continue
         results.append({"symbol": forecast.symbol,
                         "forecast_created_at": forecast.created_at.isoformat(),
                         "start": start.isoformat(),
