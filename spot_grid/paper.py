@@ -1,10 +1,11 @@
 """Deterministic paper-trading session, no live exchange integration."""
+from dataclasses import replace
 from .engine import GridEngine
 
 
 class PaperSession:
     def __init__(self, config):
-        self.engine = GridEngine(config)
+        self.engine = GridEngine(replace(config, fill_model='through'))
         self.events = []
 
     def on_candle(self, candle):
