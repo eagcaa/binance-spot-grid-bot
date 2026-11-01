@@ -20,6 +20,8 @@ class GridConfig:
     qty_step: Decimal = D("0.000001")
     min_notional: Decimal = D("5")
     debug: bool = False
+    fill_model: str = "touch"
+    through_bps: Decimal = D("5")
 
 class GridEngine:
     """Crossing-based paper fills, not production exchange execution."""
@@ -88,6 +90,8 @@ class GridEngine:
                 f"for initial inventory ({inventory_cost}) and BUY reservations "
                 f"({buy_reservations}), have {c.capital}"
             )
+        if c.fill_model not in ("touch", "through") or c.through_bps < 0:
+            raise ValueError("invalid fill model or buffer")
         self.config = c
         self.usdt_free = c.capital
         self.usdt_locked = D(0)
@@ -176,12 +180,13 @@ class GridEngine:
         if self.config.debug:
             self._assert_balances()
 
-    def on_price(self,price: Decimal):
+    def on_price(self,price: Decimal, eligible_ids=None):
         price=D(str(price))
         if price<=0:
             raise ValueError("price must be positive")
         old=self.last_price
-        pending=list(self.open_orders.values())
+        pending=[o for o in self.open_orders.values()
+                 if eligible_ids is None or o["id"] in eligible_ids]
         if price<old:
             crossed=sorted((o for o in pending if o["side"]=="BUY" and price<=o["price"]<old),
                            key=lambda o:o["price"],reverse=True)
@@ -189,6 +194,14 @@ class GridEngine:
             crossed=sorted((o for o in pending if o["side"]=="SELL" and old<o["price"]<=price),
                            key=lambda o:o["price"])
         for o in crossed:
+            if self.config.fill_model == "through":
+                buffer = self.config.through_bps / D("10000")
+                threshold = (o["price"] * (D(1) - buffer)
+                             if o["side"] == "BUY"
+                             else o["price"] * (D(1) + buffer))
+                if ((o["side"] == "BUY" and price > threshold) or
+                    (o["side"] == "SELL" and price < threshold)):
+                    continue
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
                 fee=q*self.config.fee_rate
@@ -218,6 +231,16 @@ class GridEngine:
             if self.config.debug:
                 self._assert_balances()
         self.last_price=price
+
+    def on_candle(self, candle, path="high_first", allow_same_candle_reentry=False):
+        if path not in ("high_first", "low_first"):
+            raise ValueError("invalid intrabar path")
+        eligible = None if allow_same_candle_reentry else set(self.open_orders)
+        points = ((candle["open"], candle["high"], candle["low"], candle["close"])
+                  if path == "high_first" else
+                  (candle["open"], candle["low"], candle["high"], candle["close"]))
+        for point in points:
+            self.on_price(point, eligible_ids=eligible)
 
     def snapshot(self):
         if self.config.debug:
