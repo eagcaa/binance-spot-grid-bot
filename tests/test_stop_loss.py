@@ -24,7 +24,7 @@ def test_stop_must_be_below_lower_bound(stop):
 
 
 def test_stop_touch_liquidates_before_grid_fills():
-    e = engine()
+    e = engine(slippage=D("0"))
     e.on_candle(candle("100", "110", "85", "100"))
     assert e.stopped
     assert e.stop_trades[0]["price"] == D("85")
