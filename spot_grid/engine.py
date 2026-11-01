@@ -338,63 +338,90 @@ class GridEngine:
             self.on_price(point, eligible_ids=eligible)
 
     def pnl_breakdown(self):
-        """Cost-basis attribution, with asset fees embedded in net inventory.
-
-        The grid and stop realized figures are gross of quote-asset fees.
-        Quote fees are deducted once in the reconciliation. Asset-denominated
-        fees reduce acquired quantity and increase its effective unit cost.
-        """
-        inventory = D(0)
-        basis = D(0)
-        realized_grid = D(0)
-        realized_stop = D(0)
+        """Slot-lot PNL attribution; asset-denominated fees live in lot basis."""
+        lots = {i: [] for i in range(self.config.intervals)}
+        grid_profit = D(0)
+        stop_profit = D(0)
         maker_quote_fees = D(0)
         taker_quote_fees = D(0)
         maker_asset_fees = D(0)
 
-        def acquire(gross_qty, net_qty, price):
-            nonlocal inventory, basis
-            inventory += net_qty
-            basis += gross_qty * price
+        def acquire(slot, gross, net, price):
+            lots[slot].append([net, gross * price])
 
-        def dispose(qty, price):
-            nonlocal inventory, basis
-            if qty > inventory and qty - inventory > D("0.0000000001"):
-                raise RuntimeError("PNL ledger sold more asset than acquired")
-            cost = basis * qty / inventory if inventory else D(0)
-            inventory -= qty
-            basis -= cost
+        def sell_slot(slot, qty, price):
+            remaining = qty
+            cost = D(0)
+            for lot in lots[slot]:
+                if remaining <= 0:
+                    break
+                available, lot_cost = lot
+                if available <= 0:
+                    continue
+                taken = min(remaining, available)
+                part_cost = lot_cost * taken / available
+                lot[0] -= taken
+                lot[1] -= part_cost
+                cost += part_cost
+                remaining -= taken
+            if remaining > D("0.0000000001"):
+                raise RuntimeError("PNL slot has insufficient asset for SELL")
             return qty * price - cost
 
-        for trade in self.initial_trades:
-            acquire(trade["gross_qty"], trade["net_qty"], trade["price"])
+        initial_slots = [i for i, p in enumerate(self.levels[:-1])
+                         if p >= self.config.initial_price]
+        if len(initial_slots) != len(self.initial_trades):
+            raise RuntimeError("initial slot inventory mismatch")
+        for slot, trade in zip(initial_slots, self.initial_trades):
+            acquire(slot, trade["gross_qty"], trade["net_qty"], trade["price"])
             maker_asset_fees += trade["fee"]
         for fill in self.fills:
             if fill["side"] == "BUY":
-                acquire(fill["qty"], fill["qty"] - fill["fee"], fill["price"])
+                slot = self.levels.index(fill["price"])
+                acquire(slot, fill["qty"], fill["qty"] - fill["fee"],
+                        fill["price"])
                 maker_asset_fees += fill["fee"]
             else:
-                realized_grid += dispose(fill["qty"], fill["price"])
+                slot = self.levels.index(fill["price"]) - 1
+                grid_profit += sell_slot(slot, fill["qty"], fill["price"])
                 maker_quote_fees += fill["fee"]
         for trade in self.stop_trades:
-            realized_stop += dispose(trade["qty"], trade["price"])
+            remaining = trade["qty"]
+            cost = D(0)
+            for slot in sorted(lots):
+                for lot in lots[slot]:
+                    if remaining <= 0:
+                        break
+                    available, lot_cost = lot
+                    if available <= 0:
+                        continue
+                    taken = min(remaining, available)
+                    part_cost = lot_cost * taken / available
+                    lot[0] -= taken
+                    lot[1] -= part_cost
+                    remaining -= taken
+                    cost += part_cost
+            if remaining > D("0.0000000001"):
+                raise RuntimeError("PNL lots insufficient for stop sale")
+            stop_profit += trade["qty"] * trade["price"] - cost
             taker_quote_fees += trade["fee"]
-
+        inventory = sum((lot[0] for group in lots.values()
+                         for lot in group), D(0))
+        basis = sum((lot[1] for group in lots.values()
+                     for lot in group), D(0))
         if abs(inventory - self.asset) > D("0.0000000001"):
             raise RuntimeError("PNL ledger inventory mismatch")
         unrealized = inventory * self.last_price - basis
-        fees_quote = maker_quote_fees + taker_quote_fees
-        reconciled = realized_grid + realized_stop + unrealized - fees_quote
+        reconciled = (grid_profit + stop_profit + unrealized
+                      - maker_quote_fees - taker_quote_fees)
         actual = self.usdt + self.asset * self.last_price - self.config.capital
         if abs(reconciled - actual) > D("0.00000001"):
             raise RuntimeError("PNL attribution does not reconcile to equity")
-        # Dust is only unreserved, untradable asset quantity; after a stop
-        # the remaining free asset is explicitly the unsellable remainder.
-        dust = (self.asset_free if self.stopped else
-                self.asset_free - floor_step(self.asset_free, self.config.qty_step))
+        unallocated = self.asset_free
+        dust = unallocated - floor_step(unallocated, self.config.qty_step)
         return {
-            "grid_realized_gross_usdt": str(realized_grid),
-            "stop_realized_gross_usdt": str(realized_stop),
+            "grid_realized_gross_usdt": str(grid_profit),
+            "stop_realized_gross_usdt": str(stop_profit),
             "coin_unrealized_usdt": str(unrealized),
             "maker_fees_usdt": str(maker_quote_fees),
             "taker_fees_usdt": str(taker_quote_fees),
@@ -403,6 +430,8 @@ class GridEngine:
             "grid_maker_fees_asset": str(sum(
                 (f["fee"] for f in self.fills if f["fee_asset"] == "ASSET"), D(0))),
             "asset_fees_included_in_basis": str(maker_asset_fees),
+            "unallocated_asset": str(unallocated),
+            "unallocated_value_usdt": str(unallocated * self.last_price),
             "dust_asset": str(dust),
             "dust_value_usdt": str(dust * self.last_price),
             "remaining_asset_cost_basis_usdt": str(basis),
