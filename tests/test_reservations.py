@@ -65,7 +65,7 @@ def test_200_cycles_with_small_capital():
 
 @pytest.mark.parametrize("capital", ["30", "1000"])
 def test_narrow_grid_rejected_before_first_trade(capital):
-    with pytest.raises(ValueError, match="cannot cover fees"):
+    with pytest.raises(ValueError, match="fees and quantity rounding"):
         GridEngine(GridConfig(
             lower=D("99.80"), upper=D("100.20"), intervals=4,
             capital=D(capital), initial_price=D("100")
@@ -75,3 +75,22 @@ def test_narrow_grid_rejected_before_first_trade(capital):
 def test_wide_grid_passes_fee_spacing_guard():
     engine = make("1000")
     assert engine.levels[1] > engine.levels[0]
+
+
+@pytest.mark.parametrize("capital", ["200", "1000"])
+def test_btc_sized_step_rounding_rejected(capital):
+    with pytest.raises(ValueError, match="fees and quantity rounding"):
+        GridEngine(GridConfig(
+            lower=D("95000"), upper=D("105000"), intervals=10,
+            capital=D(capital), initial_price=D("100000"),
+            qty_step=D("0.00001"), tick=D("0.01"),
+        ))
+
+
+def test_total_startup_cost_rejected_as_value_error():
+    with pytest.raises(ValueError, match="insufficient starting capital"):
+        GridEngine(GridConfig(
+            lower=D("90"), upper=D("110"), intervals=2,
+            capital=D("25"), initial_price=D("100"),
+            fee_rate=D("0.01"),
+        ))
