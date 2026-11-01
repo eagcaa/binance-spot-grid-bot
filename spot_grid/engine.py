@@ -54,17 +54,38 @@ class GridEngine:
                 f"grid order {min_order:.2f} USDT below minimum "
                 f"{c.min_notional} USDT; reduce grid intervals or add capital"
             )
-        # A completed sell must fund the next buy after both trading fees.
-        # This conservative guard prevents narrow grids from failing at runtime.
-        worst = min(
-            self.levels[i + 1] / self.levels[i]
-            for i in range(c.intervals)
+        # Validate actual step-rounded proceeds, not only the percentage spread.
+        for i, q in enumerate(self.buy_qty):
+            sold = floor_step(q * (D(1) - c.fee_rate), c.qty_step)
+            if sold * self.levels[i + 1] < c.min_notional:
+                raise ValueError(
+                    f"level {self.levels[i]}->{self.levels[i + 1]}: "
+                    "replacement SELL below minimum notional after fees and rounding"
+                )
+            if sold * self.levels[i + 1] * (D(1) - c.fee_rate) < q * self.levels[i]:
+                raise ValueError(
+                    f"level {self.levels[i]}->{self.levels[i + 1]}: "
+                    "fees and quantity rounding leave insufficient proceeds "
+                    "to fund the next BUY; use fewer grids or more capital"
+                )
+        # Calculate complete startup funding before creating any orders.
+        initial_gross = [
+            ((self.buy_qty[i] / (D(1) - c.fee_rate) / c.qty_step)
+             .to_integral_value(rounding="ROUND_UP") * c.qty_step)
+            for i, p in enumerate(self.levels[:-1])
+            if p >= c.initial_price
+        ]
+        inventory_cost = sum((q * c.initial_price for q in initial_gross), D(0))
+        buy_reservations = sum(
+            (self.buy_qty[i] * p for i, p in enumerate(self.levels[:-1])
+             if p < c.initial_price), D(0)
         )
-        if worst * (D(1) - c.fee_rate) ** 2 <= D(1):
-            minimum = (D(1) / (D(1) - c.fee_rate) ** 2 - D(1)) * 100
+        total_required = inventory_cost + buy_reservations
+        if total_required > c.capital:
             raise ValueError(
-                f"grid step {(worst - 1) * 100:.3f}% cannot cover fees; "
-                f"minimum {minimum:.3f}%"
+                f"insufficient starting capital: need {total_required} USDT "
+                f"for initial inventory ({inventory_cost}) and BUY reservations "
+                f"({buy_reservations}), have {c.capital}"
             )
         self.config = c
         self.usdt_free = c.capital
@@ -90,7 +111,8 @@ class GridEngine:
                     raise ValueError("insufficient capital for initial inventory")
                 fee = gross*c.fee_rate
                 net = gross-fee
-                assert net >= qty
+                if net < qty:
+                    raise RuntimeError("initial inventory fee calculation mismatch")
                 self.usdt_free -= cost
                 self.asset_free += net
                 self.initial_trades.append({"side":"BUY","price":c.initial_price,
