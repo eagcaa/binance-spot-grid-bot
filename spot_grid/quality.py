@@ -35,7 +35,7 @@ def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, 
             raise ValueError("outcome evaluated_at must be timezone-aware")
         same_horizon = (outcome.horizon_minutes == horizon_minutes
                         if horizon_minutes is not None and outcome.horizon_minutes is not None
-                        else outcome.horizon == horizon)
+                        else horizon is not None and outcome.horizon == horizon)
         if (outcome.symbol == symbol and same_horizon
                 and outcome.evaluated_at < as_of):
             known.append(outcome)
