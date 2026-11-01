@@ -66,3 +66,30 @@ def test_reject_duplicate_or_reversed_timestamps(tmp_path):
                     "1700000000000,100,101,99,100\\n".replace("\\n", "\n"))
     with pytest.raises(ValueError, match="strictly increase"):
         read_ohlc(path)
+
+
+def test_deferred_buy_fills_when_next_candle_stays_below_limit():
+    candles = [
+        {"open": D("100"), "high": D("106"),
+         "low": D("99"), "close": D("99")},
+        {"open": D("99"), "high": D("99.5"),
+         "low": D("97"), "close": D("98")},
+    ]
+    first = replay_ohlc(config(), candles[:1], "high_first", conservative=True)
+    assert any(o["status"] == "OPEN" and o["side"] == "BUY"
+               and o["price"] == D("100") for o in first.orders)
+    engine = replay_ohlc(config(), candles, "high_first", conservative=True)
+    assert any(f["side"] == "BUY" and f["price"] == D("100")
+               for f in engine.fills)
+
+
+def test_deferred_sell_fills_when_next_candle_stays_above_limit():
+    candles = [
+        {"open": D("100"), "high": D("101"),
+         "low": D("94"), "close": D("101")},
+        {"open": D("106"), "high": D("107"),
+         "low": D("106"), "close": D("106")},
+    ]
+    engine = replay_ohlc(config(), candles, "low_first", conservative=True)
+    assert any(f["side"] == "SELL" and f["price"] == D("100")
+               for f in engine.fills)
