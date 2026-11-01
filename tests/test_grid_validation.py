@@ -84,6 +84,7 @@ def test_fixed_buy_quantity_after_200_cycles():
             if fill["side"] == "BUY" and fill["price"] == D("100")]
     assert len(buys) == 200
     assert all(fill["qty"] == expected for fill in buys)
+    engine.on_price(D("106"))
     assert any(order["status"] == "OPEN" and order["side"] == "BUY"
                and order["price"] == D("100") and order["qty"] == expected
                for order in engine.orders)
