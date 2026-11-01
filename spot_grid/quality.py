@@ -40,6 +40,12 @@ def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, 
                 and outcome.evaluated_at < as_of):
             known.append(outcome)
     count = len(known)
+    if horizon_minutes is not None and count >= min_samples:
+        span = max(o.evaluated_at for o in known) - min(o.evaluated_at for o in known)
+        independent = int(span / timedelta(minutes=horizon_minutes))
+        if independent < min_samples:
+            rate = D(sum(bool(o.covered) for o in known)) / D(count)
+            return CoverageResult(False, count, rate, "insufficient_independent_samples")
     if min_span < timedelta(0):
         raise ValueError("min_span must be nonnegative")
     if count >= min_samples and min_span > timedelta(0):
