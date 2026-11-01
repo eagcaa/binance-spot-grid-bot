@@ -18,9 +18,9 @@ def test_forecast_requires_explicit_horizon_and_target():
 
 def test_coverage_requires_independent_time_span_when_requested():
     outcomes = [CoverageOutcome("BTCUSDT", "24h",
-                T - timedelta(hours=i + 1), True, 1440) for i in range(30)]
+                T - timedelta(days=i + 1), True, 1440) for i in range(30)]
     blocked = coverage_at(outcomes, symbol="BTCUSDT", horizon_minutes=1440,
-                          as_of=T, min_samples=30, min_span=timedelta(days=14))
+                          as_of=T, min_samples=30, min_span=timedelta(days=40))
     assert blocked.reason == "insufficient_time_span"
     assert blocked.samples == 30
     allowed = coverage_at(outcomes, symbol="BTCUSDT", horizon_minutes=1440,
