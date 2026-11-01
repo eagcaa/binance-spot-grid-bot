@@ -22,6 +22,9 @@ class GridConfig:
     debug: bool = False
     fill_model: str = "touch"
     through_bps: Decimal = D("5")
+    stop_loss: Decimal | None = None
+    taker_fee_rate: Decimal = D("0.001")
+    slippage: Decimal = D("0.0005")
 
 class GridEngine:
     """Crossing-based paper fills, not production exchange execution."""
@@ -92,6 +95,11 @@ class GridEngine:
             )
         if c.fill_model not in ("touch", "through") or c.through_bps < 0:
             raise ValueError("invalid fill model or buffer")
+        if c.stop_loss is not None and not (D(0) < c.stop_loss < c.lower):
+            raise ValueError("stop_loss must be positive and below lower grid bound")
+        if not (D(0) <= c.taker_fee_rate < D(1) and
+                D(0) <= c.slippage < D(1)):
+            raise ValueError("invalid taker fee or slippage")
         self.config = c
         self.usdt_free = c.capital
         self.usdt_locked = D(0)
@@ -103,6 +111,11 @@ class GridEngine:
         self._next_order_id = 1
         self.fills = []
         self.initial_trades = []
+        self.stopped = False
+        self.stop_trades = []
+        self.outside_candles = 0
+        self.outside_entries = 0
+        self._was_outside = False
         unit = c.capital/D(c.intervals)
         # Acquire starting inventory before reserving all limit orders.
         for i,price in enumerate(self.levels[:-1]):
@@ -180,10 +193,47 @@ class GridEngine:
         if self.config.debug:
             self._assert_balances()
 
-    def on_price(self,price: Decimal, eligible_ids=None):
+    def _stop(self, trigger_price):
+        if self.stopped:
+            return
+        # Cancel every resting order and return its reserved funds.
+        for order in list(self.open_orders.values()):
+            if order["side"] == "BUY":
+                amount = order["price"] * order["qty"]
+                self.usdt_locked -= amount
+                self.usdt_free += amount
+            else:
+                self.asset_locked -= order["qty"]
+                self.asset_free += order["qty"]
+            order["status"] = "CANCELLED"
+        self.open_orders.clear()
+        quantity = floor_step(self.asset_free, self.config.qty_step)
+        execution_price = trigger_price * (D(1) - self.config.slippage)
+        fee = quantity * execution_price * self.config.taker_fee_rate
+        if quantity > 0:
+            self.asset_free -= quantity
+            self.usdt_free += quantity * execution_price - fee
+        self.stop_trades.append({
+            "kind": "stop_loss", "side": "SELL",
+            "price": execution_price, "trigger_price": trigger_price,
+            "qty": quantity, "fee": fee, "fee_asset": "USDT",
+            "dust_asset": self.asset_free
+        })
+        self.last_price = trigger_price
+        self.stopped = True
+        self._assert_balances()
+
+    def on_price(self,price: Decimal, eligible_ids=None, _stop_path=False):
+        if self.stopped:
+            return
         price=D(str(price))
-        if price<=0:
+        if price <= 0:
             raise ValueError("price must be positive")
+        if (not _stop_path and self.config.stop_loss is not None
+                and price <= self.config.stop_loss):
+            # Only BUY orders crossed on the way down may fill before the stop.
+            self._fill_stop_path(price, None)
+            return
         old=self.last_price
         pending=[o for o in self.open_orders.values()
                  if eligible_ids is None or o["id"] in eligible_ids]
@@ -231,7 +281,44 @@ class GridEngine:
                 self._assert_balances()
         self.last_price=price
 
+    def _fill_stop_path(self, observed_price, eligible_ids):
+        stop = self.config.stop_loss
+        # No SELL fills are allowed in this conservative stop path.
+        # A gap can cross BUY levels at their limit prices.
+        pending = [
+            o for o in self.open_orders.values()
+            if o["side"] == "BUY"
+            and (eligible_ids is None or o["id"] in eligible_ids)
+        ]
+        buffer = (self.config.through_bps / D("10000")
+                  if self.config.fill_model == "through" else D(0))
+        low = min(self.last_price, observed_price, stop)
+        buys = sorted(
+            (o for o in pending
+             if low <= o["price"] * (D(1) - buffer)),
+            key=lambda o: o["price"], reverse=True)
+        for order in buys:
+            # Execute through the existing reservation and replacement logic,
+            # but restrict eligibility to this single original BUY order.
+            # Temporarily shield other orders from the regular price path.
+            self.on_price(order["price"] * (D(1) - buffer),
+                          eligible_ids={order["id"]}, _stop_path=True)
+        trigger = observed_price if observed_price <= stop else stop
+        self._stop(trigger)
+
     def on_candle(self, candle, path="high_first", allow_same_candle_reentry=False):
+        if self.stopped:
+            return
+        outside = candle["low"] < self.config.lower or candle["high"] > self.config.upper
+        if outside:
+            self.outside_candles += 1
+            if not self._was_outside:
+                self.outside_entries += 1
+        self._was_outside = outside
+        if self.config.stop_loss is not None and candle["low"] <= self.config.stop_loss:
+            # The opening-to-stop downward path fills eligible BUYs, never SELLs.
+            self._fill_stop_path(candle["open"], set(self.open_orders))
+            return
         if path not in ("high_first", "low_first"):
             raise ValueError("invalid intrabar path")
         eligible = None if allow_same_candle_reentry else set(self.open_orders)
@@ -249,9 +336,14 @@ class GridEngine:
                 "usdt_free":str(self.usdt_free),"usdt_locked":str(self.usdt_locked),
                 "asset_free":str(self.asset_free),"asset_locked":str(self.asset_locked),
                 "equity":str(equity),
+                "stopped":self.stopped,
+                "outside_candles":self.outside_candles,
+                "outside_entries":self.outside_entries,
+                "dust_asset":str(self.asset_free if self.stopped else D(0)),
+                "stop_trades":self.stop_trades and [{k:str(v) if isinstance(v,Decimal) else v for k,v in t.items()} for t in self.stop_trades] or [],
                 "pnl":str(equity-self.config.capital),
                 "roi_pct":str((equity/self.config.capital-1)*100),
-                "fees_usdt":str(sum((f["fee"] for f in self.fills if f["fee_asset"]=="USDT"),D(0))),
+                "fees_usdt":str(sum((f["fee"] for f in self.fills if f["fee_asset"]=="USDT"),D(0)) + sum((t["fee"] for t in self.stop_trades),D(0))),
                 "fees_asset":str(sum((f["fee"] for f in self.fills if f["fee_asset"]=="ASSET"),D(0))
                                  +sum((t["fee"] for t in self.initial_trades),D(0))),
                 "initial_trades":len(self.initial_trades),
