@@ -124,3 +124,46 @@ def test_minimum_margin_can_reject_tight_grid():
         plan_auto(forecast(), as_of=T, price=D("100"),
                   capital=D("1000"), max_intervals=12,
                   min_net_margin=D("0.5"))
+
+
+def test_filtered_classic_trades_when_forecast_grid_is_too_narrow():
+    narrow = RangeForecast("BTCUSDT", T, T + timedelta(hours=1),
+                           D("99.99"), D("100.01"), 60, D("0.70"))
+    outcomes = [CoverageOutcome("BTCUSDT", "1h",
+                                T - timedelta(hours=2), True, 60)]
+    report = evaluate_strategy([narrow], [candle(T)], outcomes,
+                               min_samples=1, max_intervals=6)
+    row = report["windows"][0]
+    assert row["skipped"].startswith("forecast_grid_unavailable:")
+    assert row["forecast_grid"] is None
+    assert row["filtered_classic_grid"] is not None
+    assert row["filtered_classic_pnl"] == row["classic_pnl"]
+    assert report["summary"]["forecast_vs_filtered_same_windows"]["windows"] == 0
+
+
+def test_filtered_classic_stays_cash_when_quality_ineligible():
+    report = evaluate_strategy([forecast()], [candle(T)], [],
+                               min_samples=1, max_intervals=6)
+    row = report["windows"][0]
+    assert row["classic_grid"] is not None
+    assert row["filtered_classic_grid"] is None
+    assert row["filtered_classic_pnl"] == "0"
+    assert row["filtered_classic_pnl_breakdown"] is None
+
+
+def test_pnl_breakdowns_reconcile_for_each_grid_strategy():
+    outcomes = [CoverageOutcome("BTCUSDT", "1h",
+                                T - timedelta(hours=2), True, 60)]
+    report = evaluate_strategy([forecast()], [candle(T)], outcomes,
+                               min_samples=1, max_intervals=6)
+    row = report["windows"][0]
+    for name in ("forecast", "classic", "filtered_classic"):
+        breakdown = row[f"{name}_pnl_breakdown"]
+        assert breakdown is not None
+        assert abs(D(breakdown["pnl_reconciled_usdt"]) -
+                   D(row[f"{name}_pnl"])) < D("0.00000001")
+        aggregate = report["summary"]["pnl_breakdown"][name]
+        for key in ("grid_realized_gross_usdt", "coin_unrealized_usdt",
+                    "maker_fees_usdt", "taker_fees_usdt"):
+            assert D(aggregate[key]) == D(breakdown[key])
+    assert report["summary"]["forecast_vs_filtered_same_windows"]["windows"] == 1
