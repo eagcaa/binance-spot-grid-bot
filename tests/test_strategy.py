@@ -97,7 +97,7 @@ def test_filtered_window_keeps_baselines_and_cash_forecast():
 
 def test_forecast_target_sets_threshold_with_tolerance():
     outcomes = [CoverageOutcome("BTCUSDT", "1h",
-                                T - timedelta(minutes=i + 1), i < 7)
+                                T - timedelta(hours=i + 1), i < 7)
                 for i in range(10)]
     report = evaluate_strategy([forecast()], [candle(T)], outcomes,
                                horizon="1h", min_samples=10, max_intervals=6)

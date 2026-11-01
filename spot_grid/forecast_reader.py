@@ -23,7 +23,7 @@ def decode_rows(rows):
         forecasts.append(RangeForecast(
             symbol, _aware(generated), _aware(due), D(str(lower)),
             D(str(upper)), int(minutes), D(str(target))))
-        if status == "evaluated" and covered is not None and evaluated is not None:
+        if covered is not None and evaluated is not None:
             outcomes.append(CoverageOutcome(
                 symbol, f"{minutes}m", _aware(evaluated), bool(covered),
                 int(minutes)))
