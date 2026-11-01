@@ -11,6 +11,7 @@ from datetime import datetime
 from decimal import Decimal as D
 
 from .binance_reader import read_binance_candles
+from .exchange_rules import read_symbol_rules
 from .forecast_reader import load_forecasts
 from .strategy import evaluate_strategy
 
@@ -50,8 +51,12 @@ def main(argv=None):
     forecasts = [f for f in forecasts if f.horizon_minutes == args.horizon_minutes]
     candles = read_binance_candles(args.symbol, start=args.start,
                                    end=args.end, interval=interval)
+    rules = read_symbol_rules(args.symbol)
     report = evaluate_strategy(forecasts, candles, outcomes,
-                               capital=args.capital, min_samples=args.min_samples)
+                               capital=args.capital, min_samples=args.min_samples,
+                               **rules)
+    report['exchange_rules'] = {k: str(v) for k, v in rules.items()}
+    print(f"Exchange filters ({args.symbol}, current): {report['exchange_rules']}")
     print(f"Symbol: {args.symbol} | windows: {report['total_windows']} | traded: {report['traded_windows']}")
     print("Strategy       Total PNL       Avg PNL        Win rate       Worst")
     for key in ("forecast", "classic", "filtered_classic", "buy_hold", "forecast_traded_only"):
