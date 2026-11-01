@@ -12,7 +12,7 @@ T = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 def forecast(start=T, end=T + timedelta(hours=2)):
-    return RangeForecast("BTCUSDT", start, end, D("90"), D("110"))
+    return RangeForecast("BTCUSDT", start, end, D("90"), D("110"), 60, D("0.70"))
 
 
 def candle(time, open="100", high="102", low="98", close="100"):
@@ -64,7 +64,7 @@ def test_invalid_window_is_skipped_without_stopping_following_windows():
 
 def test_narrow_band_with_unprofitable_grids_is_skipped():
     narrow = RangeForecast("BTCUSDT", T, T + timedelta(minutes=15),
-                           D("99.6"), D("100.4"))
+                           D("99.6"), D("100.4"), 15, D("0.70"))
     results = walk_forward([narrow], [candle(T)], intervals=10)
     assert len(results) == 1
     assert "skipped" in results[0]
