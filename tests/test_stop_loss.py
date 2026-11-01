@@ -28,7 +28,7 @@ def test_stop_touch_liquidates_before_grid_fills():
     e.on_candle(candle("100", "110", "85", "100"))
     assert e.stopped
     assert e.stop_trades[0]["price"] == D("85")
-    assert e.fills == []
+    assert [f["price"] for f in e.fills] == [D("95"), D("90")]
     assert e.usdt_locked == e.asset_locked == 0
     assert len(e.open_orders) == 0
     assert all(o["status"] == "CANCELLED" for o in e.orders)
@@ -60,3 +60,26 @@ def test_outside_band_counts_candles_and_excursions():
         e.on_candle(c)
     assert e.outside_candles == 3
     assert e.outside_entries == 2
+
+
+def test_stop_candle_fills_downward_buys_before_liquidation():
+    e = engine(slippage=D("0"))
+    e.on_candle(candle("100", "100", "84", "84"))
+    assert [f["price"] for f in e.fills] == [D("95"), D("90")]
+    assert D("9") < e.stop_trades[0]["qty"] < D("11")
+    assert e.stop_trades[0]["trigger_price"] == D("85")
+    assert e.stopped
+
+
+def test_price_stream_stop_fills_crossed_buys():
+    e = engine(slippage=D("0"))
+    e.on_price(D("84"))
+    assert [f["price"] for f in e.fills] == [D("95"), D("90")]
+    assert e.stop_trades[0]["trigger_price"] == D("84")
+    assert e.stopped
+
+
+def test_stop_candle_ignores_profitable_sell_even_if_high_touched():
+    e = engine(slippage=D("0"))
+    e.on_candle(candle("100", "110", "84", "100"))
+    assert all(f["side"] == "BUY" for f in e.fills)
