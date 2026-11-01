@@ -1,10 +1,10 @@
 # Prespecified evaluation protocol (2026-11-01)
 
-This protocol is fixed before running the new filtered-classic comparison across coins.
+This protocol is fixed before running the new filtered-classic comparison across the 11-symbol cohort. BTCUSDT was examined beforehand to generate the hypothesis; its results must be reported separately, not included in the cohort's pass/fail totals.
 
 ## Primary exploratory test
 - Horizon: **240 minutes (4 hours)**.
-- Universe: **11 symbols**: ADAUSDT, AVAXUSDT, BNBUSDT, BTCUSDT, DOGEUSDT, ETHUSDT, LINKUSDT, PENDLEUSDT, PYTHUSDT, SOLUSDT, XRPUSDT. Exclude ETCUSDT (only one forecast); exclude SUIUSDT from this initial fixed 11-symbol cohort.
+- Universe: **11 symbols**: ADAUSDT, AVAXUSDT, BNBUSDT, DOGEUSDT, ETHUSDT, LINKUSDT, PENDLEUSDT, PYTHUSDT, SOLUSDT, SUIUSDT, XRPUSDT. Exclude ETCUSDT (only one forecast). **BTCUSDT is the hypothesis-generating discovery sample and is excluded from the 11-symbol evaluation cohort.**
 - Shared UTC interval: **2026-10-26T00:00:00+00:00 through 2026-11-01T00:00:00+00:00** (end exclusive).
 - Capital: 1000 USDT per independent window; min_samples: 15 for this short exploratory dataset, and default min_samples: 30 for later confirmatory runs. No compounding.
 - Baseline classic grid: +/- 5% of each window opening price, unchanged fees, slippage, fill model and candle interval.
