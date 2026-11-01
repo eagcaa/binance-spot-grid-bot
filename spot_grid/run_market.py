@@ -54,10 +54,15 @@ def main(argv=None):
                                capital=args.capital, min_samples=args.min_samples)
     print(f"Symbol: {args.symbol} | windows: {report['total_windows']} | traded: {report['traded_windows']}")
     print("Strategy       Total PNL       Avg PNL        Win rate       Worst")
-    for key in ("forecast", "classic", "buy_hold", "forecast_traded_only"):
+    for key in ("forecast", "classic", "filtered_classic", "buy_hold", "forecast_traded_only"):
         item = report["summary"][key]
         print(f"{key:18} {item['total_pnl']:>12} {str(item['average_pnl']):>14} "
               f"{str(item['win_rate']):>14} {str(item['worst_window_pnl']):>12}")
+    print("Same traded windows (forecast vs filtered classic):",
+          report["summary"]["forecast_vs_filtered_same_windows"])
+    print("PNL attribution (gross grid, gross stop, unrealized coin, quote fees):")
+    for name, parts in report["summary"]["pnl_breakdown"].items():
+        print(f"  {name}: {parts}")
     print("Forecast beat classic:", report["summary"]["forecast_beats_classic_windows"])
     print("Skipped:", report["skip_reasons"])
     print("Classic:", report["classic_definition"])
