@@ -19,6 +19,19 @@ def _summary(values):
             "worst_window_pnl": str(min(values))}
 
 
+PNL_COMPONENTS = ("grid_realized_gross_usdt", "stop_realized_gross_usdt",
+                  "coin_unrealized_usdt", "maker_fees_usdt", "taker_fees_usdt")
+
+
+def _breakdown(engine):
+    return engine.pnl_breakdown()
+
+
+def _aggregate_breakdown(rows, key):
+    parts = [r[key] for r in rows if r.get(key) is not None]
+    return {k: str(sum((D(p[k]) for p in parts), D(0))) for k in PNL_COMPONENTS}
+
+
 def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
                       capital=D("1000"), target=None, coverage_tolerance=D("0.05"),
                       min_samples=30, min_history_days=0, max_intervals=50,
@@ -27,7 +40,7 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
     """Independent, non-compounded windows. Filter failures stay in cash.
 
     Classic grid resets around each window's opening price with fixed +/- width.
-    All three strategies use the same windows and terminal mark-to-market basis.
+    All four strategies use the same windows and terminal mark-to-market basis.
     """
     if not D(0) < classic_half_width < D(1):
         raise ValueError("invalid classic_half_width")
@@ -81,6 +94,7 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
         entry["classic_grid"] = None
         entry["classic_pnl"] = "0"
         entry["classic_intervals"] = None
+        entry["classic_pnl_breakdown"] = None
         if classic_engine is not None:
             for _, bar in window:
                 classic_engine.on_candle(bar, path="low_first",
@@ -88,6 +102,7 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
             entry["classic_grid"] = classic_engine.snapshot(include_pnl=False)
             entry["classic_pnl"] = entry["classic_grid"]["pnl"]
             entry["classic_intervals"] = classic_config.intervals
+            entry["classic_pnl_breakdown"] = _breakdown(classic_engine)
 
         if not D(0) <= forecast.target_coverage <= D(1) or forecast.horizon_minutes <= 0:
             raise ValueError("invalid forecast horizon or target coverage")
@@ -104,9 +119,19 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
         entry["forecast_pnl"] = "0"
         entry["forecast_grid"] = None
         entry["forecast_intervals"] = None
+        entry["forecast_pnl_breakdown"] = None
+        entry["filtered_classic_grid"] = None
+        entry["filtered_classic_pnl"] = "0"
+        entry["filtered_classic_pnl_breakdown"] = None
         if not quality.eligible:
             entry["skipped"] = quality.reason
         else:
+            # Quality eligibility is independent of forecast-grid feasibility.
+            # A narrow forecast band must NOT prevent filtered classic trading.
+            if classic_engine is not None:
+                entry["filtered_classic_grid"] = entry["classic_grid"]
+                entry["filtered_classic_pnl"] = entry["classic_pnl"]
+                entry["filtered_classic_pnl_breakdown"] = entry["classic_pnl_breakdown"]
             try:
                 config = plan_auto(forecast, as_of=as_of, price=first_price,
                                    capital=capital, max_intervals=max_intervals,
@@ -121,11 +146,13 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
                 entry["forecast_grid"] = forecast_engine.snapshot(include_pnl=False)
                 entry["forecast_pnl"] = entry["forecast_grid"]["pnl"]
                 entry["forecast_intervals"] = config.intervals
+                entry["forecast_pnl_breakdown"] = _breakdown(forecast_engine)
         results.append(entry)
     skipped = Counter(r["skipped"].split(":")[0] for r in results if "skipped" in r)
     forecast_pnls = [D(r["forecast_pnl"]) for r in results]
     traded_pnls = [D(r["forecast_pnl"]) for r in results if r["forecast_grid"] is not None]
     classic_pnls = [D(r["classic_pnl"]) for r in results]
+    filtered_pnls = [D(r["filtered_classic_pnl"]) for r in results]
     hold_pnls = [D(r["buy_hold"]["pnl"]) for r in results]
     return {"windows": results, "total_windows": len(results),
             "traded_windows": sum(r["forecast_grid"] is not None for r in results),
@@ -134,7 +161,18 @@ def evaluate_strategy(forecasts, candles, outcomes, *, horizon=None,
             "summary": {"forecast": _summary(forecast_pnls),
                         "forecast_traded_only": _summary(traded_pnls),
                         "classic": _summary(classic_pnls),
+                        "filtered_classic": _summary(filtered_pnls),
                         "buy_hold": _summary(hold_pnls),
+                        "pnl_breakdown": {
+                            "forecast": _aggregate_breakdown(results, "forecast_pnl_breakdown"),
+                            "classic": _aggregate_breakdown(results, "classic_pnl_breakdown"),
+                            "filtered_classic": _aggregate_breakdown(results, "filtered_classic_pnl_breakdown"),
+                        },
+                        "forecast_vs_filtered_same_windows": {
+                            "windows": sum(r["forecast_grid"] is not None and r["filtered_classic_grid"] is not None for r in results),
+                            "forecast_total_pnl": str(sum((D(r["forecast_pnl"]) for r in results if r["forecast_grid"] is not None and r["filtered_classic_grid"] is not None), D(0))),
+                            "filtered_classic_total_pnl": str(sum((D(r["filtered_classic_pnl"]) for r in results if r["forecast_grid"] is not None and r["filtered_classic_grid"] is not None), D(0))),
+                        },
                         "forecast_beats_classic_windows":
                             sum(a > b for a, b in zip(forecast_pnls, classic_pnls))},
             "classic_definition": "Each window re-centers at opening price +/- fixed classic_half_width; no coverage filter; invalid classic grid stays cash",
