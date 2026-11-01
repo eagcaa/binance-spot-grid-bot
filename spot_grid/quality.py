@@ -10,6 +10,7 @@ class CoverageOutcome:
     horizon: str
     evaluated_at: datetime
     covered: bool
+    horizon_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -20,17 +21,22 @@ class CoverageResult:
     reason: str | None
 
 
-def coverage_at(outcomes, *, symbol, horizon, as_of, target=D("0.80"),
+def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, target=D("0.80"),
                 min_samples=30):
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
     if not D(0) <= target <= D(1) or min_samples < 1:
         raise ValueError("invalid coverage policy")
+    if horizon_minutes is not None and horizon_minutes <= 0:
+        raise ValueError("invalid horizon_minutes")
     known = []
     for outcome in outcomes:
         if outcome.evaluated_at.tzinfo is None:
             raise ValueError("outcome evaluated_at must be timezone-aware")
-        if (outcome.symbol == symbol and outcome.horizon == horizon
+        same_horizon = (outcome.horizon_minutes == horizon_minutes
+                        if horizon_minutes is not None and outcome.horizon_minutes is not None
+                        else outcome.horizon == horizon)
+        if (outcome.symbol == symbol and same_horizon
                 and outcome.evaluated_at < as_of):
             known.append(outcome)
     count = len(known)
