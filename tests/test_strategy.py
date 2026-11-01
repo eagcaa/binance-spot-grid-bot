@@ -11,7 +11,7 @@ T = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 def forecast(start=T):
     return RangeForecast("BTCUSDT", start, start + timedelta(hours=1),
-                         D("90"), D("110"))
+                         D("90"), D("110"), 60, D("0.70"))
 
 
 def candle(at):

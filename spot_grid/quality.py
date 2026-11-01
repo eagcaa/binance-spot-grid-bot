@@ -1,6 +1,6 @@
 """Point-in-time forecast coverage: never count outcomes not yet evaluated."""
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal as D
 
 
@@ -22,7 +22,7 @@ class CoverageResult:
 
 
 def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, target=D("0.80"),
-                min_samples=30):
+                min_samples=30, min_span=timedelta(0)):
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
     if not D(0) <= target <= D(1) or min_samples < 1:
@@ -40,6 +40,13 @@ def coverage_at(outcomes, *, symbol, horizon=None, horizon_minutes=None, as_of, 
                 and outcome.evaluated_at < as_of):
             known.append(outcome)
     count = len(known)
+    if min_span < timedelta(0):
+        raise ValueError("min_span must be nonnegative")
+    if count >= min_samples and min_span > timedelta(0):
+        span = max(o.evaluated_at for o in known) - min(o.evaluated_at for o in known)
+        if span < min_span:
+            rate = D(sum(bool(o.covered) for o in known)) / D(count)
+            return CoverageResult(False, count, rate, "insufficient_time_span")
     rate = D(sum(bool(o.covered) for o in known)) / D(count) if count else None
     if count < min_samples:
         return CoverageResult(False, count, rate, "insufficient_history")

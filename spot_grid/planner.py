@@ -13,8 +13,8 @@ class RangeForecast:
     valid_until: datetime
     lower: D
     upper: D
-    horizon_minutes: int = 60
-    target_coverage: D = D("0.70")
+    horizon_minutes: int
+    target_coverage: D
 
 
 def plan(forecast: RangeForecast, *, as_of: datetime, price: D,
