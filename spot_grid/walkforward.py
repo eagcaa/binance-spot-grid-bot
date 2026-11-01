@@ -2,7 +2,7 @@
 from datetime import datetime
 from decimal import Decimal as D
 
-from .ohlc import replay_ohlc
+from .engine import GridEngine
 from .planner import plan
 
 
@@ -39,13 +39,14 @@ def walk_forward(forecasts, candles, *, capital=D("1000"), intervals=10,
             config = plan(forecast, as_of=start, price=first["open"],
                           capital=capital, intervals=intervals,
                           stop_loss=stop_loss, **grid_options)
-            engine = replay_ohlc(config, [c for _, c in window],
-                                 path="low_first", conservative=True)
+            engine = GridEngine(config)
         except ValueError as exc:
             results.append({"symbol": forecast.symbol,
                             "start": start.isoformat(), "skipped": str(exc)})
             previous_end = forecast.valid_until
             continue
+        for _, candle in window:
+            engine.on_candle(candle, path="low_first", allow_same_candle_reentry=False)
         results.append({"symbol": forecast.symbol,
                         "forecast_created_at": forecast.created_at.isoformat(),
                         "start": start.isoformat(),
