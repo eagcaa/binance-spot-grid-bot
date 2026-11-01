@@ -42,7 +42,8 @@ class GridEngine:
         # Reject grid configurations that silently create no usable orders.
         unit = c.capital / D(c.intervals)
         min_order = min(
-            floor_step(unit / p, c.qty_step) * p for p in self.levels
+            floor_step(unit / self.levels[i + 1], c.qty_step) * self.levels[i]
+            for i in range(c.intervals)
         )
         if min_order < c.min_notional:
             raise ValueError(
@@ -55,6 +56,7 @@ class GridEngine:
         self.last_price = c.initial_price
         self.orders = []
         self.fills = []
+        self.initial_trades = []
         unit = c.capital/D(c.intervals)
         for i,price in enumerate(self.levels[:-1]):
             if price < c.initial_price:
@@ -62,16 +64,26 @@ class GridEngine:
             else:
                 target = self.levels[i+1]
                 qty = floor_step(unit/target,c.qty_step)
-                cost = qty*c.initial_price
-                if cost <= self.usdt and qty*target >= c.min_notional:
-                    self.usdt -= cost
-                    self.asset += qty
-                    self._order("SELL",target,qty)
+                # Initial spot purchase: gross amount includes the base-asset fee.
+                gross = ((qty / (D(1)-c.fee_rate)) / c.qty_step).to_integral_value(rounding="ROUND_UP") * c.qty_step
+                cost = gross*c.initial_price
+                if cost > self.usdt:
+                    raise ValueError("insufficient capital for initial inventory")
+                fee = gross*c.fee_rate
+                net = gross-fee
+                assert net >= qty
+                self.usdt -= cost
+                self.asset += net
+                self.initial_trades.append({"side":"BUY","price":c.initial_price,
+                    "gross_qty":gross,"net_qty":net,"fee":fee,
+                    "fee_asset":"ASSET","cost_usdt":cost})
+                self._order("SELL",target,qty)
 
     def _order(self,side,price,qty):
-        if qty>0 and qty*price>=self.config.min_notional:
-            self.orders.append({"id":len(self.orders)+1,"side":side,
-                                "price":price,"qty":qty,"status":"OPEN"})
+        if qty <= 0 or qty*price < self.config.min_notional:
+            raise RuntimeError(f"{side} {qty}@{price} below minimum notional")
+        self.orders.append({"id":len(self.orders)+1,"side":side,
+                            "price":price,"qty":qty,"status":"OPEN"})
 
     def on_price(self,price: Decimal):
         price=D(str(price))
@@ -88,23 +100,29 @@ class GridEngine:
         for o in crossed:
             p,q=o["price"],o["qty"]
             if o["side"]=="BUY":
-                fee=p*q*self.config.fee_rate
-                if self.usdt<p*q+fee: continue
-                self.usdt-=p*q+fee
-                self.asset+=q
+                fee=q*self.config.fee_rate
+                if self.usdt < p*q:
+                    raise RuntimeError("insufficient unreserved USDT for BUY")
+                self.usdt-=p*q
+                self.asset+=q-fee
                 next_side="SELL"
                 next_price=self.levels[self.levels.index(p)+1]
+                next_qty=floor_step(q-fee,self.config.qty_step)
+                fee_asset="ASSET"
             else:
-                if self.asset<q: continue
+                if self.asset<q:
+                    raise RuntimeError("insufficient unreserved asset for SELL")
                 fee=p*q*self.config.fee_rate
                 self.asset-=q
                 self.usdt+=p*q-fee
                 next_side="BUY"
                 next_price=self.levels[self.levels.index(p)-1]
+                next_qty=q
+                fee_asset="USDT"
             o["status"]="FILLED"
             self.fills.append({"order_id":o["id"],"side":o["side"],"price":p,
-                               "qty":q,"fee_usdt":fee})
-            self._order(next_side,next_price,q)
+                               "qty":q,"fee":fee,"fee_asset":fee_asset})
+            self._order(next_side,next_price,next_qty)
         self.last_price=price
 
     def snapshot(self):
@@ -112,6 +130,9 @@ class GridEngine:
         return {"usdt":str(self.usdt),"asset":str(self.asset),"equity":str(equity),
                 "pnl":str(equity-self.config.capital),
                 "roi_pct":str((equity/self.config.capital-1)*100),
-                "fees_usdt":str(sum((f["fee_usdt"] for f in self.fills),D(0))),
+                "fees_usdt":str(sum((f["fee"] for f in self.fills if f["fee_asset"]=="USDT"),D(0))),
+                "fees_asset":str(sum((f["fee"] for f in self.fills if f["fee_asset"]=="ASSET"),D(0))
+                                 +sum((t["fee"] for t in self.initial_trades),D(0))),
+                "initial_trades":len(self.initial_trades),
                 "fills":len(self.fills),
                 "open_orders":sum(o["status"]=="OPEN" for o in self.orders)}
