@@ -79,3 +79,48 @@ def test_strategy_skips_when_coverage_unknown():
                                horizon="1h", min_samples=1)
     assert report["traded_windows"] == 0
     assert report["skip_reasons"] == {"insufficient_history": 1}
+
+
+def test_filtered_window_keeps_baselines_and_cash_forecast():
+    report = evaluate_strategy([forecast()], [candle(T)], [], horizon="1h",
+                               min_samples=1, max_intervals=6)
+    row = report["windows"][0]
+    assert row["skipped"] == "insufficient_history"
+    assert row["forecast_pnl"] == "0"
+    assert row["forecast_grid"] is None
+    assert row["classic_grid"] is not None
+    assert row["buy_hold"]["pnl"] is not None
+    assert report["summary"]["forecast"]["total_pnl"] == "0"
+    assert report["summary"]["classic"]["total_pnl"] == row["classic_pnl"]
+    assert report["summary"]["buy_hold"]["total_pnl"] == row["buy_hold"]["pnl"]
+
+
+def test_forecast_target_sets_threshold_with_tolerance():
+    outcomes = [CoverageOutcome("BTCUSDT", "1h",
+                                T - timedelta(minutes=i + 1), i < 7)
+                for i in range(10)]
+    report = evaluate_strategy([forecast()], [candle(T)], outcomes,
+                               horizon="1h", min_samples=10, max_intervals=6)
+    row = report["windows"][0]
+    assert row["coverage"] == "0.7"
+    assert row["coverage_target"] == "0.65"
+    assert "skipped" not in row
+
+
+def test_numeric_horizon_matching_rejects_wrong_horizon():
+    outcomes = [CoverageOutcome("BTCUSDT", "4h",
+                                T - timedelta(seconds=1), True, 240),
+                CoverageOutcome("BTCUSDT", "1h",
+                                T - timedelta(seconds=1), False, 60)]
+    result = coverage_at(outcomes, symbol="BTCUSDT", horizon_minutes=60,
+                         as_of=T, min_samples=1, target=D("0.5"))
+    assert result.samples == 1
+    assert result.coverage == 0
+
+
+def test_minimum_margin_can_reject_tight_grid():
+    import pytest
+    with pytest.raises(ValueError, match="no viable grid count"):
+        plan_auto(forecast(), as_of=T, price=D("100"),
+                  capital=D("1000"), max_intervals=12,
+                  min_net_margin=D("0.5"))
